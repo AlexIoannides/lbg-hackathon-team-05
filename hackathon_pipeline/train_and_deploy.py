@@ -1,5 +1,5 @@
 """
-Example Vertex AI pipeline with the following stages:
+Vertex AI pipeline for the hackathon project, with the following stages:
  - get data (uses synthetic data generation);
  - train model using Scikit-Learn; and,
  - uploads model to Vertex AI registry, creates endpoint and deploys
@@ -10,9 +10,9 @@ stage uses the Google Cloud AI platform API.
 """
 from kfp.v2 import compiler, dsl
 
-PIPELINE_ROOT_PATH = "gs://vai-pipelines-data"
+PIPELINE_ROOT_PATH = "gs://vai-pipelines-data/hackathon"
 PROJECT_ID = "hackathon-team-05"
-PROJECT_MODEL_NAME = "sklearn-demo"
+PROJECT_MODEL_NAME = "nyc-public-bike-ride-forecasts"
 PROJECT_SERVING_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest"
 
 
@@ -21,16 +21,27 @@ PROJECT_SERVING_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:
     base_image="python:3.9",
     output_component_file="pipelines/build/get_test_data.yaml"
 )
-def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Artifact]) -> None:
-    """Generate synthetic dataset."""
-    from numpy.random import standard_normal
-    from pandas import DataFrame
+def get_data(dataset: dsl.Output[dsl.Artifact]) -> None:
+    """Generate data from BigQuery."""
+    from google.cloud import bigquery
 
-    x = standard_normal(n_obs)
-    eta = standard_normal(n_obs)
-    y = 0.5 * x + 0.25 * eta
-    df = DataFrame({"x": x, "y": y})
-    df.to_csv(f"{dataset.path}.csv", index=False)
+    query_string = """
+    SELECT
+    CONCAT(
+        'https://stackoverflow.com/questions/',
+        CAST(id as STRING)) as url,
+    view_count
+    FROM `bigquery-public-data.stackoverflow.posts_questions`
+    WHERE tags like '%google-bigquery%'
+    ORDER BY view_count DESC
+    """
+
+    dataset = (
+        bigquery.Client().query(query_string)
+        .result()
+        .to_dataframe(create_bqstorage_client=True)
+    )
+    dataset.to_csv(f"{dataset.path}.csv")
 
 
 @dsl.component(
@@ -98,7 +109,7 @@ def deploy(
     pipeline_root=PIPELINE_ROOT_PATH)
 def pipeline(project_id: str) -> None:
     """Train and deploy pipeline definition."""
-    data_op = get_test_data(10000)
+    data_op = get_data()
 
     train_model_op = train_model(data_op.outputs["dataset"])
 
@@ -114,4 +125,4 @@ def pipeline(project_id: str) -> None:
 if __name__ == "__main__":
     compiler.Compiler().compile(
         pipeline_func=pipeline,
-        package_path="pipelines/build/sklearn_train_and_deploy_demo.json")
+        package_path="hackathon_pipeline/build/hackathon_train_and_deploy.json")
