@@ -1,8 +1,14 @@
-from typing import NamedTuple
+"""
+Example Vertex AI pipeline with the following stages:
+ - get data (uses synthetic data generation);
+ - train model using Scikit-Learn; and,
+ - uploads model to Vertex AI registry, creates endpoint and deploys
+   the model to the endpoint.
 
+Each step is implemented within a Kubeflow component, where the final
+stage uses the Google Cloud AI platform API.
+"""
 from kfp.v2 import compiler, dsl
-from google.cloud import aiplatform
-from google_cloud_pipeline_components import aiplatform as gcc_aip
 
 PIPELINE_ROOT_PATH = "gs://vai-pipelines-data"
 PROJECT_ID = "hackathon-team-05"
@@ -13,9 +19,9 @@ PROJECT_SERVING_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:
 @dsl.component(
     packages_to_install=["numpy", "pandas"],
     base_image="python:3.9",
-    output_component_file="get_test_data.yaml"
+    output_component_file="pipelines/build/get_test_data.yaml"
 )
-def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Dataset]) -> None:
+def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Artifact]) -> None:
     """Generate synthetic dataset."""
     from numpy.random import standard_normal
     from pandas import DataFrame
@@ -24,19 +30,19 @@ def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Dataset]) -> None:
     eta = standard_normal(n_obs)
     y = 0.5 * x + 0.25 * eta
     df = DataFrame({"x": x, "y": y})
-    df.to_csv(dataset.path, index=False)
+    df.to_csv(f"{dataset.path}.csv", index=False)
 
 
 @dsl.component(
     packages_to_install=["joblib", "pandas", "scikit-learn"],
     base_image="python:3.9",
-    output_component_file="train_model.yaml"
+    output_component_file="pipelines/build/train_model.yaml"
 )
 def train_model(
-    dataset: dsl.Input[dsl.Dataset],
-    model: dsl.Output[dsl.Model],
+    dataset: dsl.Input[dsl.Artifact],
+    model: dsl.Output[dsl.Artifact],
     metrics: dsl.Output[dsl.Metrics]
-) -> NamedTuple("output", [("deploy", str)]):
+) -> None:
     """Train model."""
     import joblib
     import pandas as pd
@@ -44,7 +50,7 @@ def train_model(
     from sklearn.metrics import mean_absolute_error
     from sklearn.model_selection import train_test_split
 
-    dataset = pd.read_csv(dataset.path)
+    dataset = pd.read_csv(f"{dataset.path}.csv")
     X_train, X_test, y_train, y_test = train_test_split(dataset[["x"]], dataset["y"])
 
     dummy_model = DummyRegressor()
@@ -55,10 +61,36 @@ def train_model(
     metrics.log_metric("MAE", mae)
 
     model.metadata["MAE"] = mae
-    joblib.dump(dummy_model, model.path)
+    joblib.dump(dummy_model, f"{model.path}.joblib")
 
-    deploy = "true" if mae <= 1 else "false"
-    return (deploy,)
+
+@dsl.component(
+    base_image='python:3.9',
+    packages_to_install=['google-cloud-aiplatform']
+)
+def deploy(
+    project_id: str,
+    project_model_name: str,
+    project_serving_image: str,
+    model: dsl.Input[dsl.Artifact],
+    vertex_endpoint: dsl.Output[dsl.Artifact],
+    vertex_model: dsl.Output[dsl.Artifact]
+) -> None:
+    """Upload model, create endpoint and deploy!"""
+    from google.cloud import aiplatform
+    aiplatform.init(project=project_id)
+
+    uploaded_model = aiplatform.Model.upload(
+        display_name=project_model_name,
+        artifact_uri=model.uri.replace("/model", ""),
+        serving_container_image_uri=project_serving_image,
+    )
+
+    endpoint = uploaded_model.deploy(
+        machine_type='n1-standard-4'
+    )
+    vertex_endpoint.uri = endpoint.resource_name
+    vertex_model.uri = uploaded_model.resource_name
 
 
 @dsl.pipeline(
@@ -70,34 +102,16 @@ def pipeline(project_id: str) -> None:
 
     train_model_op = train_model(data_op.outputs["dataset"])
 
-    # model_upload_op = gcc_aip.ModelUploadOp(
-    #     project_id=project_id,
-    #     display_name=PROJECT_MODEL_NAME,
-    #     artifact_uri = model.uri.replace("model", ""),
-    #     serving_container_image_uri =  serving_container_image_uri,
-    #     serving_container_health_route=f"/v1/models/{MODEL_NAME}",
-    #     serving_container_predict_route=f"/v1/models/{MODEL_NAME}:predict",
-    #     serving_container_environment_variables={
-    #     "MODEL_NAME": MODEL_NAME,
-    # },       
-    #     unmanaged_container_model=train_model_op.outputs["model"],
-    # )
-
-    create_endpoint_op = gcc_aip.EndpointCreateOp(
-        project=project_id,
-        display_name=PROJECT_MODEL_NAME,
-    )
-
-    gcc_aip.ModelDeployOp(
-        model=train_model_op.outputs["model"],
-        endpoint=create_endpoint_op.outputs['endpoint'],
-        automatic_resources_min_replica_count=1,
-        automatic_resources_max_replica_count=1,
+    deploy(
+        PROJECT_ID,
+        PROJECT_MODEL_NAME,
+        PROJECT_SERVING_IMAGE,
+        train_model_op.outputs["model"]
     )
 
 
-# CI/CD
+# example step used to create build artefacts in CI/CD pipeline
 if __name__ == "__main__":
     compiler.Compiler().compile(
         pipeline_func=pipeline,
-        package_path="sklearn_train_and_deploy_demo.json")
+        package_path="pipelines/build/sklearn_train_and_deploy_demo.json")
