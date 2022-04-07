@@ -19,9 +19,9 @@ PROJECT_SERVING_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:
 @dsl.component(
     packages_to_install=["numpy", "pandas"],
     base_image="python:3.9",
-    output_component_file="pipelines/build/get_test_data.yaml"
+    output_component_file="example_pipeline/build/get_test_data.yaml"
 )
-def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Artifact]) -> None:
+def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Dataset]) -> None:
     """Generate synthetic dataset."""
     from numpy.random import standard_normal
     from pandas import DataFrame
@@ -36,11 +36,11 @@ def get_test_data(n_obs: int, dataset: dsl.Output[dsl.Artifact]) -> None:
 @dsl.component(
     packages_to_install=["joblib", "pandas", "scikit-learn"],
     base_image="python:3.9",
-    output_component_file="pipelines/build/train_model.yaml"
+    output_component_file="example_pipeline/build/train_model.yaml"
 )
 def train_model(
-    dataset: dsl.Input[dsl.Artifact],
-    model: dsl.Output[dsl.Artifact],
+    dataset: dsl.Input[dsl.Dataset],
+    model: dsl.Output[dsl.Model],
     metrics: dsl.Output[dsl.Metrics]
 ) -> None:
     """Train model."""
@@ -66,13 +66,14 @@ def train_model(
 
 @dsl.component(
     base_image='python:3.9',
-    packages_to_install=['google-cloud-aiplatform']
+    packages_to_install=['google-cloud-aiplatform'],
+    output_component_file="example_pipeline/build/deploy.yaml"
 )
 def deploy(
     project_id: str,
     project_model_name: str,
     project_serving_image: str,
-    model: dsl.Input[dsl.Artifact],
+    model: dsl.Input[dsl.Model],
     vertex_endpoint: dsl.Output[dsl.Artifact],
     vertex_model: dsl.Output[dsl.Artifact]
 ) -> None:
@@ -94,7 +95,7 @@ def deploy(
 
 
 @dsl.pipeline(
-    name="train-and-deploy",
+    name="sklearn-demo-train-and-deploy",
     pipeline_root=PIPELINE_ROOT_PATH)
 def pipeline(project_id: str) -> None:
     """Train and deploy pipeline definition."""

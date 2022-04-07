@@ -130,7 +130,8 @@ def train_model(
 
 @dsl.component(
     base_image='python:3.9',
-    packages_to_install=['google-cloud-aiplatform']
+    packages_to_install=['google-cloud-aiplatform'],
+    output_component_file="hackathon_pipeline/build/get_test_data.yaml"
 )
 def deploy(
     project_id: str,
