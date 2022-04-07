@@ -4,3 +4,4 @@ isort==5.10.1
 black==22.3.0
 pytest==7.1.1
 ipykernel==6.12.1
+python-dotenv==0.20.0
