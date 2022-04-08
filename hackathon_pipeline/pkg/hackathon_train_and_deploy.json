@@ -1,0 +1,267 @@
+{
+  "pipelineSpec": {
+    "components": {
+      "comp-deploy": {
+        "executorLabel": "exec-deploy",
+        "inputDefinitions": {
+          "artifacts": {
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          },
+          "parameters": {
+            "project_id": {
+              "type": "STRING"
+            },
+            "project_model_name": {
+              "type": "STRING"
+            },
+            "project_serving_image": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "vertex_endpoint": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "vertex_model": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-get-data": {
+        "executorLabel": "exec-get-data",
+        "inputDefinitions": {
+          "parameters": {
+            "project_id": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-train-model": {
+        "executorLabel": "exec-train-model",
+        "inputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "deploymentSpec": {
+      "executors": {
+        "exec-deploy": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "deploy"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'google-cloud-aiplatform' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef deploy(\n    project_id: str,\n    project_model_name: str,\n    project_serving_image: str,\n    model: dsl.Input[dsl.Model],\n    vertex_endpoint: dsl.Output[dsl.Artifact],\n    vertex_model: dsl.Output[dsl.Artifact]\n) -> None:\n    \"\"\"Upload model, create endpoint and deploy!\"\"\"\n    from google.cloud import aiplatform\n    aiplatform.init(project=project_id)\n\n    uploaded_model = aiplatform.Model.upload(\n        display_name=project_model_name,\n        artifact_uri=model.uri.replace(\"/model\", \"\"),\n        serving_container_image_uri=project_serving_image,\n    )\n\n    endpoint = uploaded_model.deploy(\n        machine_type='n1-standard-4'\n    )\n    vertex_endpoint.uri = endpoint.resource_name\n    vertex_model.uri = uploaded_model.resource_name\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        },
+        "exec-get-data": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "get_data"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'numpy' 'pandas' 'google-cloud-aiplatform' 'pyarrow' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef get_data(project_id: str, dataset: dsl.Output[dsl.Dataset]) -> None:\n    \"\"\"Generate data from BigQuery.\"\"\"\n    from google.cloud import bigquery\n\n    query_string = \"\"\"\n        SELECT \n            EXTRACT(DAYOFYEAR FROM bike.starttime) AS day_of_year,\n            EXTRACT(YEAR FROM bike.starttime) AS year,\n            SUM(bike.tripduration) AS total_duration,\n            MAX(bike.start_station_latitude) AS lat,\n            MAX(bike.start_station_longitude) AS lon,\n            AVG(weather.prcp) AS avg_prcp,\n            AVG(weather.tmin) AS avg_tmin,\n            AVG(weather.tmax) AS avg_tmax,\n            AVG(weather.snow) AS avg_snow,\n            AVG(weather.wind) AS avg_wind\n        FROM `hackathon-team-05.team05bike.noaa_daily_weather_nyc_central_park` AS weather\n        INNER JOIN `hackathon-team-05.team05bike.NYCbike` AS bike\n        ON weather.date = EXTRACT(DATE FROM bike.starttime)\n        GROUP BY 1, 2\n    \"\"\"\n\n    df = (\n        bigquery.Client(project=project_id).query(query_string)\n        .result()\n        .to_dataframe(create_bqstorage_client=True)\n    )\n    df.to_csv(f\"{dataset.path}.csv\")\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        },
+        "exec-train-model": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "train_model"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'joblib' 'pandas' 'scikit-learn' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef train_model(\n    dataset: dsl.Input[dsl.Dataset],\n    model: dsl.Output[dsl.Model],\n) -> None:\n    \"\"\"Train model.\"\"\"\n    import joblib\n    import pandas as pd\n    from sklearn.ensemble import RandomForestRegressor\n\n    def sort(df, sort_cols):\n        return df.sort_values(sort_cols)\n\n    def define_mobility_index(df, col_to_index):\n        df['mobility_index'] = 100 * df[col_to_index] / df[col_to_index].iloc[0]\n        return df, 'mobility_index'\n\n    def add_pct_change_to_index(df, y, period):\n        df[y + '_diff'] = df[y].pct_change(periods=period)\n        return df\n\n    def add_momentum_terms(df, mobility_index, rolling_averages):\n        for rolling_avg in rolling_averages:\n            df['momentum_r' + str(rolling_avg)] = (\n                df[mobility_index + '_diff'].rolling(rolling_avg).mean() * 1 + df[mobility_index]\n            ).shift(1)\n        return df\n\n    def add_timeshift_to_index(df, mobility_index, shifts_to_y):\n        for shift in shifts_to_y:\n            df[mobility_index + '_t' + str(abs(shift))] = df[mobility_index].shift(shift)\n        return df\n\n    def setup_df(df, sort_cols, col_to_index, period, rolling_averages, shifts_to_y):\n        df = sort(df, sort_cols)\n        df, mobility_index = define_mobility_index(df, col_to_index)\n        df = add_pct_change_to_index(df, mobility_index, period)\n        df = add_momentum_terms(df, mobility_index, rolling_averages)\n        df = add_timeshift_to_index(df, mobility_index, shifts_to_y)\n        df = df.dropna()\n        return df\n\n    df = setup_df(\n        df=pd.read_csv(f\"{dataset.path}.csv\"),\n        sort_cols=['year', 'day_of_year'],\n        col_to_index='total_duration',\n        period=1,\n        rolling_averages=[2, 3, 5, 10],\n        shifts_to_y=[-1]\n    )\n\n    X = [\n        'mobility_index',\n        'momentum_r2',\n        'momentum_r3',\n        'momentum_r5',\n        'momentum_r10',\n        'avg_prcp',\n        'avg_tmin',\n        'avg_tmax',\n        'avg_snow',\n        'avg_wind'\n    ]\n\n    y = 'mobility_index_t1'\n    mask = (df['year'] == 2013) | (df['year'] == 2014) | (df['year'] == 2015) | (df['year'] == 2016)\n    rfr = RandomForestRegressor(random_state=123)\n    rfr.fit(df.loc[mask, X], df.loc[mask, y])\n    joblib.dump(rfr, f\"{model.path}.joblib\")\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        }
+      }
+    },
+    "pipelineInfo": {
+      "name": "nyc-bike-ride-forecasts-train-and-deploy"
+    },
+    "root": {
+      "dag": {
+        "tasks": {
+          "deploy": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-deploy"
+            },
+            "dependentTasks": [
+              "train-model"
+            ],
+            "inputs": {
+              "artifacts": {
+                "model": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "model",
+                    "producerTask": "train-model"
+                  }
+                }
+              },
+              "parameters": {
+                "project_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "hackathon-team-05"
+                    }
+                  }
+                },
+                "project_model_name": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "nyc-public-bike-ride-forecasts"
+                    }
+                  }
+                },
+                "project_serving_image": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "deploy"
+            }
+          },
+          "get-data": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-get-data"
+            },
+            "inputs": {
+              "parameters": {
+                "project_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "hackathon-team-05"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "get-data"
+            }
+          },
+          "train-model": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-train-model"
+            },
+            "dependentTasks": [
+              "get-data"
+            ],
+            "inputs": {
+              "artifacts": {
+                "dataset": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "dataset",
+                    "producerTask": "get-data"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "train-model"
+            }
+          }
+        }
+      },
+      "inputDefinitions": {
+        "parameters": {
+          "project_id": {
+            "type": "STRING"
+          }
+        }
+      }
+    },
+    "schemaVersion": "2.0.0",
+    "sdkVersion": "kfp-1.8.12"
+  },
+  "runtimeConfig": {
+    "gcsOutputDirectory": "gs://vai-pipelines-data/hackathon"
+  }
+}

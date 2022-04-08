@@ -1,0 +1,295 @@
+{
+  "pipelineSpec": {
+    "components": {
+      "comp-deploy": {
+        "executorLabel": "exec-deploy",
+        "inputDefinitions": {
+          "artifacts": {
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          },
+          "parameters": {
+            "project_id": {
+              "type": "STRING"
+            },
+            "project_model_name": {
+              "type": "STRING"
+            },
+            "project_serving_image": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "vertex_endpoint": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "vertex_model": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-get-test-data": {
+        "executorLabel": "exec-get-test-data",
+        "inputDefinitions": {
+          "parameters": {
+            "n_obs": {
+              "type": "INT"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-train-model": {
+        "executorLabel": "exec-train-model",
+        "inputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "metrics": {
+              "artifactType": {
+                "schemaTitle": "system.Metrics",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "deploymentSpec": {
+      "executors": {
+        "exec-deploy": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "deploy"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'google-cloud-aiplatform' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef deploy(\n    project_id: str,\n    project_model_name: str,\n    project_serving_image: str,\n    model: dsl.Input[dsl.Model],\n    vertex_endpoint: dsl.Output[dsl.Artifact],\n    vertex_model: dsl.Output[dsl.Artifact]\n) -> None:\n    \"\"\"Upload model, create endpoint and deploy!\"\"\"\n    from google.cloud import aiplatform\n    aiplatform.init(project=project_id)\n\n    uploaded_model = aiplatform.Model.upload(\n        display_name=project_model_name,\n        artifact_uri=model.uri.replace(\"/model\", \"\"),\n        serving_container_image_uri=project_serving_image,\n    )\n\n    endpoint = uploaded_model.deploy(\n        machine_type='n1-standard-4'\n    )\n    vertex_endpoint.uri = endpoint.resource_name\n    vertex_model.uri = uploaded_model.resource_name\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        },
+        "exec-get-test-data": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "get_test_data"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'numpy' 'pandas' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef get_test_data(n_obs: int, dataset: dsl.Output[dsl.Dataset]) -> None:\n    \"\"\"Generate synthetic dataset.\"\"\"\n    from numpy.random import standard_normal\n    from pandas import DataFrame\n\n    x = standard_normal(n_obs)\n    eta = standard_normal(n_obs)\n    y = 0.5 * x + 0.25 * eta\n    df = DataFrame({\"x\": x, \"y\": y})\n    df.to_csv(f\"{dataset.path}.csv\", index=False)\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        },
+        "exec-train-model": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "train_model"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'joblib' 'pandas' 'scikit-learn' 'kfp==1.8.12' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef train_model(\n    dataset: dsl.Input[dsl.Dataset],\n    model: dsl.Output[dsl.Model],\n    metrics: dsl.Output[dsl.Metrics]\n) -> None:\n    \"\"\"Train model.\"\"\"\n    import joblib\n    import pandas as pd\n    from sklearn.dummy import DummyRegressor\n    from sklearn.metrics import mean_absolute_error\n    from sklearn.model_selection import train_test_split\n\n    dataset = pd.read_csv(f\"{dataset.path}.csv\")\n    X_train, X_test, y_train, y_test = train_test_split(dataset[[\"x\"]], dataset[\"y\"])\n\n    dummy_model = DummyRegressor()\n    dummy_model.fit(X_train, y_train)\n\n    y_test_pred = dummy_model.predict(X_test)\n    mae = mean_absolute_error(y_test, y_test_pred)\n    metrics.log_metric(\"MAE\", mae)\n\n    model.metadata[\"MAE\"] = mae\n    joblib.dump(dummy_model, f\"{model.path}.joblib\")\n\n"
+            ],
+            "image": "python:3.9"
+          }
+        }
+      }
+    },
+    "pipelineInfo": {
+      "name": "sklearn-demo-train-and-deploy"
+    },
+    "root": {
+      "dag": {
+        "outputs": {
+          "artifacts": {
+            "train-model-metrics": {
+              "artifactSelectors": [
+                {
+                  "outputArtifactKey": "metrics",
+                  "producerSubtask": "train-model"
+                }
+              ]
+            }
+          }
+        },
+        "tasks": {
+          "deploy": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-deploy"
+            },
+            "dependentTasks": [
+              "train-model"
+            ],
+            "inputs": {
+              "artifacts": {
+                "model": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "model",
+                    "producerTask": "train-model"
+                  }
+                }
+              },
+              "parameters": {
+                "project_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "hackathon-team-05"
+                    }
+                  }
+                },
+                "project_model_name": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "sklearn-demo"
+                    }
+                  }
+                },
+                "project_serving_image": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "deploy"
+            }
+          },
+          "get-test-data": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-get-test-data"
+            },
+            "inputs": {
+              "parameters": {
+                "n_obs": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "intValue": "10000"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "get-test-data"
+            }
+          },
+          "train-model": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-train-model"
+            },
+            "dependentTasks": [
+              "get-test-data"
+            ],
+            "inputs": {
+              "artifacts": {
+                "dataset": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "dataset",
+                    "producerTask": "get-test-data"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "train-model"
+            }
+          }
+        }
+      },
+      "inputDefinitions": {
+        "parameters": {
+          "project_id": {
+            "type": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "train-model-metrics": {
+            "artifactType": {
+              "schemaTitle": "system.Metrics",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "schemaVersion": "2.0.0",
+    "sdkVersion": "kfp-1.8.12"
+  },
+  "runtimeConfig": {
+    "gcsOutputDirectory": "gs://vai-pipelines-data"
+  }
+}

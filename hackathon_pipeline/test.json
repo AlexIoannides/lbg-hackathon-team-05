@@ -1,0 +1,28 @@
+{
+    "instances": [
+        {
+            "instance_key_1": "42.069654",
+            "instance_key_2": "31.695767",
+            "instance_key_3": "31.757096",
+            "instance_key_4": "31.802222",
+            "instance_key_5": "31.799908",
+            "instance_key_6": "0.000000",
+            "instance_key_7": "-13.800000",
+            "instance_key_8": "-7.100000",
+            "instance_key_9": "0.000000",
+            "instance_key_10": "3.500000"
+        },
+        {
+            "instance_key_1": "42.069654",
+            "instance_key_2": "31.695767",
+            "instance_key_3": "31.757096",
+            "instance_key_4": "31.802222",
+            "instance_key_5": "31.799908",
+            "instance_key_6": "0.000000",
+            "instance_key_7": "10.000000",
+            "instance_key_8": "20.100000",
+            "instance_key_9": "0.000000",
+            "instance_key_10": "3.500000"
+        }
+    ]
+}

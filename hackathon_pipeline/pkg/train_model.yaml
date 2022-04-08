@@ -1,0 +1,106 @@
+name: Train model
+description: Train model.
+inputs:
+- {name: dataset, type: Dataset}
+outputs:
+- {name: model, type: Model}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'joblib' 'pandas' 'scikit-learn' 'kfp==1.8.12' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      import kfp
+      from kfp.v2 import dsl
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def train_model(
+          dataset: dsl.Input[dsl.Dataset],
+          model: dsl.Output[dsl.Model],
+      ) -> None:
+          """Train model."""
+          import joblib
+          import pandas as pd
+          from sklearn.ensemble import RandomForestRegressor
+
+          def sort(df, sort_cols):
+              return df.sort_values(sort_cols)
+
+          def define_mobility_index(df, col_to_index):
+              df['mobility_index'] = 100 * df[col_to_index] / df[col_to_index].iloc[0]
+              return df, 'mobility_index'
+
+          def add_pct_change_to_index(df, y, period):
+              df[y + '_diff'] = df[y].pct_change(periods=period)
+              return df
+
+          def add_momentum_terms(df, mobility_index, rolling_averages):
+              for rolling_avg in rolling_averages:
+                  df['momentum_r' + str(rolling_avg)] = (
+                      df[mobility_index + '_diff'].rolling(rolling_avg).mean() * 1 + df[mobility_index]
+                  ).shift(1)
+              return df
+
+          def add_timeshift_to_index(df, mobility_index, shifts_to_y):
+              for shift in shifts_to_y:
+                  df[mobility_index + '_t' + str(abs(shift))] = df[mobility_index].shift(shift)
+              return df
+
+          def setup_df(df, sort_cols, col_to_index, period, rolling_averages, shifts_to_y):
+              df = sort(df, sort_cols)
+              df, mobility_index = define_mobility_index(df, col_to_index)
+              df = add_pct_change_to_index(df, mobility_index, period)
+              df = add_momentum_terms(df, mobility_index, rolling_averages)
+              df = add_timeshift_to_index(df, mobility_index, shifts_to_y)
+              df = df.dropna()
+              return df
+
+          df = setup_df(
+              df=pd.read_csv(f"{dataset.path}.csv"),
+              sort_cols=['year', 'day_of_year'],
+              col_to_index='total_duration',
+              period=1,
+              rolling_averages=[2, 3, 5, 10],
+              shifts_to_y=[-1]
+          )
+
+          X = [
+              'mobility_index',
+              'momentum_r2',
+              'momentum_r3',
+              'momentum_r5',
+              'momentum_r10',
+              'avg_prcp',
+              'avg_tmin',
+              'avg_tmax',
+              'avg_snow',
+              'avg_wind'
+          ]
+
+          y = 'mobility_index_t1'
+          mask = (df['year'] == 2013) | (df['year'] == 2014) | (df['year'] == 2015) | (df['year'] == 2016)
+          rfr = RandomForestRegressor(random_state=123)
+          rfr.fit(df.loc[mask, X], df.loc[mask, y])
+          joblib.dump(rfr, f"{model.path}.joblib")
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - train_model

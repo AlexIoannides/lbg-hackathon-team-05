@@ -1,0 +1,45 @@
+name: Get data
+description: Generate data from BigQuery.
+inputs:
+- {name: project_id, type: String}
+outputs:
+- {name: dataset, type: Dataset}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'numpy' 'pandas' 'google-cloud-aiplatform' 'pyarrow' 'kfp==1.8.12' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing\
+      \ import *\n\ndef get_data(project_id: str, dataset: dsl.Output[dsl.Dataset])\
+      \ -> None:\n    \"\"\"Generate data from BigQuery.\"\"\"\n    from google.cloud\
+      \ import bigquery\n\n    query_string = \"\"\"\n        SELECT \n          \
+      \  EXTRACT(DAYOFYEAR FROM bike.starttime) AS day_of_year,\n            EXTRACT(YEAR\
+      \ FROM bike.starttime) AS year,\n            SUM(bike.tripduration) AS total_duration,\n\
+      \            MAX(bike.start_station_latitude) AS lat,\n            MAX(bike.start_station_longitude)\
+      \ AS lon,\n            AVG(weather.prcp) AS avg_prcp,\n            AVG(weather.tmin)\
+      \ AS avg_tmin,\n            AVG(weather.tmax) AS avg_tmax,\n            AVG(weather.snow)\
+      \ AS avg_snow,\n            AVG(weather.wind) AS avg_wind\n        FROM `hackathon-team-05.team05bike.noaa_daily_weather_nyc_central_park`\
+      \ AS weather\n        INNER JOIN `hackathon-team-05.team05bike.NYCbike` AS bike\n\
+      \        ON weather.date = EXTRACT(DATE FROM bike.starttime)\n        GROUP\
+      \ BY 1, 2\n    \"\"\"\n\n    df = (\n        bigquery.Client(project=project_id).query(query_string)\n\
+      \        .result()\n        .to_dataframe(create_bqstorage_client=True)\n  \
+      \  )\n    df.to_csv(f\"{dataset.path}.csv\")\n\n"
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - get_data
