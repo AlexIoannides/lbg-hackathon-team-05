@@ -1,0 +1,63 @@
+name: Train model
+description: Train model.
+inputs:
+- {name: dataset, type: Dataset}
+outputs:
+- {name: model, type: Model}
+- {name: metrics, type: Metrics}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'joblib' 'pandas' 'scikit-learn' 'kfp==1.8.12' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      import kfp
+      from kfp.v2 import dsl
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def train_model(
+          dataset: dsl.Input[dsl.Dataset],
+          model: dsl.Output[dsl.Model],
+          metrics: dsl.Output[dsl.Metrics]
+      ) -> None:
+          """Train model."""
+          import joblib
+          import pandas as pd
+          from sklearn.dummy import DummyRegressor
+          from sklearn.metrics import mean_absolute_error
+          from sklearn.model_selection import train_test_split
+
+          dataset = pd.read_csv(f"{dataset.path}.csv")
+          X_train, X_test, y_train, y_test = train_test_split(dataset[["x"]], dataset["y"])
+
+          dummy_model = DummyRegressor()
+          dummy_model.fit(X_train, y_train)
+
+          y_test_pred = dummy_model.predict(X_test)
+          mae = mean_absolute_error(y_test, y_test_pred)
+          metrics.log_metric("MAE", mae)
+
+          model.metadata["MAE"] = mae
+          joblib.dump(dummy_model, f"{model.path}.joblib")
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - train_model
